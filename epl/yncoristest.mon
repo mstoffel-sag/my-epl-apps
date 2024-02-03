@@ -1,0 +1,99 @@
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+ 
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+ 
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+ 
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+ 
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+ 
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+using com.apama.cumulocity.MeasurementFragment;
+ 
+/** Miscellaneous utilities */
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+ 
+monitor MySampleMonitor {
+ /** Initialize the application */
+ 
+ action onload() {
+ monitor.subscribe(Event.SUBSCRIBE_CHANNEL);
+ on all Event(type="c8y_LocationUpdate") as evt{
+ 
+ 
+ 
+ if(evt.params.hasKey("Properties") and evt.params["Properties"].hasEntry("c8y_Position")){
+   dictionary<any,any> properties := <dictionary <any,any> > evt.params["Properties"];
+ AnyExtractor anyex := new AnyExtractor;
+ anyex.data := properties;
+ dictionary<string,any> pos := new dictionary<string,any>;
+ pos.add("lat",anyex.getFloat("c8y_Position.lat"));
+ pos.add("lng",anyex.getFloat("c8y_Position.lng"));
+ 
+ Event updateEvent := new Event;
+ updateEvent.params.add("c8y_Position",pos);
+ updateEvent.params.add("Properties",new any);
+ updateEvent.source := evt.source;
+ updateEvent.time:= evt.time;
+ updateEvent.id := evt.id;
+ updateEvent.text := evt.text;
+ 
+ send updateEvent to Event.SEND_CHANNEL;
+ 
+ ManagedObject mo := new ManagedObject;
+ //mo.params.add("ync_testde", new dictionary<any, any>);
+ mo.id := evt.source;
+ log "any" + anyex.getAny("c8y_Position").toString() at INFO;
+ 
+ mo.position["lat"]:= anyex.getFloat("c8y_Position.lat");
+ mo.position["lng"]:= anyex.getFloat("c8y_Position.lng");
+ 
+ //mo.position["accuracy"]:= 0.0;
+ //mo.position["altitude"]:= 0.0;
+ 
+ log "mo" + mo.toString() at INFO;
+ 
+ integer reqId := com.apama.cumulocity.Util.generateReqId();
+ 
+ send mo.withResponse(reqId, {"X-Cumulocity-Application-Key": "apama"}) to ManagedObject.UPDATE_CHANNEL;
+ 
+ // If the ManagedObject creation succeeded do something with the 
+ // returned object or id.
+ on ObjectCommitted(reqId=reqId) as c and not 
+ ObjectCommitFailed(reqId=reqId){
+ log "New managed object successfully created " + c.toString() 
+ at INFO;
+ }
+ 
+ // If the ManagedObject creation failed, log an error.
+ on ObjectCommitFailed(reqId=reqId) as cfail and not 
+ ObjectCommitted(reqId=reqId){
+ log "Creating a new managed object failed " + cfail.toString() 
+ at ERROR;
+ }
+ 
+ } //END IF
+ }
+ 
+ }
+ 
+}
