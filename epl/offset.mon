@@ -1,0 +1,117 @@
+/**
+* This application adds an offset to each measurement that matches the following parameters 
+* seriesOffset
+* fragmentOffset
+* typeOffset
+* The offset has to be configured in the managed object as a property named "offset"
+*/
+
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+using com.apama.cumulocity.MeasurementFragment;
+using com.apama.cumulocity.Util;
+
+monitor Offset {
+	
+	dictionary <string, float> offMOs := new dictionary<string, float>;
+	string seriesOffset := "accelerationZ";
+	string fragmentOffset := "c8y_Acceleration";
+	string typeOffset:= "c8y_Acceleration";
+	string suffix := "_offset";
+	
+	action onload() {
+
+		monitor.subscribe(MeasurementFragment.SUBSCRIBE_CHANNEL);
+		monitor.subscribe(ManagedObject.SUBSCRIBE_CHANNEL);
+
+		searchOffSetMOs();
+		
+		/**
+		* Check each measurement if it fits the filter create a new measurement with offset addition.
+		**/
+		on all MeasurementFragment(type=typeOffset) as mfo {
+			if (
+					mfo.valueFragment = fragmentOffset and 
+					mfo.valueSeries = seriesOffset and
+					offMOs.hasKey(mfo.source)
+					){
+				float offsetValue := mfo.value + offMOs.getOrAdd(mfo.source, 0.0);
+				MeasurementFragment mf := new MeasurementFragment;
+				mf.type := mfo.type;
+				mf.source := mfo.source;
+				mf.time := mfo.time;
+				mf.valueFragment := mfo.valueFragment;
+				mf.valueSeries := mfo.valueSeries + suffix;
+				mf.value := offsetValue;
+				mf.unit := mfo.unit;
+				log "Sendign offset measurementFragment: " + mf.toString() at INFO;
+        		send mf to MeasurementFragment.SEND_CHANNEL;
+			}	
+		}
+
+		/**
+		* On each change of a ManagedObject check if it still has the ffset fragment. 
+		* If no remove from dict. If yes update dict.
+		**/
+		on all ManagedObject() as mo {
+			
+			log "MO Change: " + mo.toString() at INFO;
+			if mo.params.hasKey("offset"){
+				offMOs.add(mo.id, <float> mo.params.getOr("offset", 0.0));
+			}else{
+				if offMOs.hasKey(mo.id){
+					offMOs.remove(mo.id);
+				}
+			}
+			log "Updated offMOs: " + offMOs.toString() at INFO;
+		}
+	}
+	
+	
+	/**
+	* Search all ManagedObjects that have the offset fragment 
+	* and save the id an offset in a dictionary 
+	**/
+	action searchOffSetMOs(){
+		offMOs.clear();
+		FindManagedObject findManagedObject := new FindManagedObject;
+		findManagedObject.reqId := Util.generateReqId();
+
+		/* Filter on managed objects with wich match devices and has offset fragment */
+		findManagedObject.params.add("query", "$filter=( has(c8y_IsDevice) and has(offset) )");
+
+		/* Retrieve only the first 2000 managed objects. */
+		findManagedObject.params.add("currentPage", "1");
+		findManagedObject.params.add("pageSize", "2000");
+
+		/** Subscribe to FindManagedObjectResponse.SUBSCRIBE_CHANNEL to 
+		 *  listen for responses.
+		 */
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+
+		/** Listen for matching responses. */
+		on all FindManagedObjectResponse(reqId=findManagedObject.reqId) as resp
+		and not FindManagedObjectResponseAck(reqId=findManagedObject.reqId) {
+			log "Find managed object response : " +
+									resp.managedObject.toString() at INFO;
+			offMOs.add(resp.managedObject.id, <float> resp.managedObject.params.getOr("offset",0.0));
+			log "Found Ids: " + offMOs.toString() at INFO;
+		}
+
+		/** Listen for request completed acknowledgement. */
+		on FindManagedObjectResponseAck(reqId=findManagedObject.reqId) {
+			monitor.unsubscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+			log "Find managed object request completed " +
+									findManagedObject.reqId.toString() at INFO;
+			
+		}
+
+		send findManagedObject to FindManagedObject.SEND_CHANNEL;
+	}
+	action listenForOffset(){
+		
+	}
+
+}
