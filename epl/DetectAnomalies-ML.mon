@@ -1,0 +1,177 @@
+/**
+* This application queries a separate microservice (machine learning)
+* to make predictions based on the Activity Recognition use case in the
+* documentation. However, instead of Zementis, it now queries an ONNX RunTime Microservice.
+*/
+
+using com.apama.cumulocity.CumulocityRequestInterface;
+using com.apama.correlator.Component;
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+using com.apama.cumulocity.FindManagedObject;
+using com.softwareag.connectivity.httpclient.HttpOptions;
+using com.softwareag.connectivity.httpclient.HttpTransport;
+using com.softwareag.connectivity.httpclient.Request;
+using com.softwareag.connectivity.httpclient.Response;
+using com.apama.json.JSONPlugin;
+using com.apama.aggregates.avg; 
+using com.apama.aggregates.last;
+
+
+/**
+* Call another microservice
+*/
+monitor DetectAnomalies {
+	event AccelerationAverageByDevice {
+		string source;
+		float avgX_Value;
+		float avgY_Value;
+		float avgZ_Value;
+		string unit;
+	}
+
+	CumulocityRequestInterface request;
+
+	//Define the Root of your ONNX Microservice
+	string REQUEST_ROOT:= "/service/specific-onnx-1/predict";
+
+	action onload() {
+		request := CumulocityRequestInterface.connectToCumulocity();
+		// Replace yourDeviceId with the value of your device id
+		// not used at the moment
+		// string yourDeviceId:= "4458572501";
+
+		listenAndScoreMeasurements();
+	}
+
+	action listenAndScoreMeasurements()
+	{
+		//Subscribe to the Measurement Channel of your device
+		monitor.subscribe(Measurement.SUBSCRIBE_CHANNEL);
+		/*
+		on all Measurement(source = deviceId) as m {
+			if (m.measurements.hasKey("c8y_Acceleration")) {
+				log "Received measurement" at INFO;
+				dictionary < string, any > RECORD:= convertMeasurementToRecord(m);
+				log "Sending record to ONNX RunTime - " + JSONPlugin.toJSON(RECORD) at INFO;
+				
+				//Define the Root of your ONNX Microservice
+				string REQUEST_ROOT:= "/service/specific-onnx-1/predict";
+				
+				
+				Request onnxRequest:=
+					request.createRequest("POST", REQUEST_ROOT, RECORD);
+
+				//onnxRequest.setQueryParameter(QUERY_PARAM, RECORD);
+				onnxRequest.execute(onnxHandler(deviceId).requestHandler);
+				
+				log "EPL execution completed." at INFO;
+			}
+		}
+		*/
+
+		from m in all Measurement(type="c8y_Acceleration") within (2.5) every 1.0
+		group by m.source select
+			AccelerationAverageByDevice(m.source,
+			avg(m.measurements["c8y_Acceleration"]["accelerationX"].value),
+			avg(m.measurements["c8y_Acceleration"]["accelerationY"].value),
+			avg(m.measurements["c8y_Acceleration"]["accelerationZ"].value),
+			last(m.measurements["c8y_Acceleration"]["accelerationZ"].unit)) as avgdata {
+
+				log "Received measurement" at INFO;
+				dictionary < string, any > record:= convertAVGRecordToRecord(avgdata);
+				log "Sending record to ONNX RunTime - " + JSONPlugin.toJSON(record) at INFO;
+						
+				Request onnxRequest:=
+					request.createRequest("POST", REQUEST_ROOT, record);
+
+				onnxRequest.execute(onnxHandler(avgdata.source).requestHandler);
+				
+				log "EPL execution completed." at INFO;
+			}
+			
+	}
+
+	action convertAVGRecordToRecord(AccelerationAverageByDevice m)
+	returns dictionary < string, any >
+	{
+		dictionary < string, any > json := { };
+		json["accelerationX"] := m.avgX_Value;
+		json["accelerationY"] := m.avgY_Value;
+		json["accelerationZ"] := m.avgZ_Value;
+
+		dictionary < string, any > inputs := {"inputs":json};
+		return inputs;
+		//return JSONPlugin.toJSON(inputs);
+	}
+
+
+	action convertMeasurementToRecord(com.apama.cumulocity.Measurement m)
+	returns dictionary < string, any >
+	{
+		dictionary < string, any > json := { };
+		json["accelerationX"] := m.measurements.
+			getOrDefault("c8y_Acceleration").
+			getOrDefault("accelerationX").value;
+		json["accelerationY"] := m.measurements.
+			getOrDefault("c8y_Acceleration").
+			getOrDefault("accelerationY").value;
+		json["accelerationZ"] := m.measurements.
+			getOrDefault("c8y_Acceleration").
+			getOrDefault("accelerationZ").value;
+
+		
+		dictionary < string, any > inputs := {"inputs":json};
+		return inputs;
+		//return JSONPlugin.toJSON(inputs);
+	}
+
+
+	event onnxHandler
+	{
+		string deviceId;
+		action requestHandler(Response onnxResponse)
+		{
+			integer statusCode:= onnxResponse.statusCode;
+			if (statusCode = 200)
+			{
+				dictionary<string, any> outputs := {};
+				
+				//extract the results from the Output payload from the response.
+				//Since it is a sequence<sequence<float>> response, the float prediction value needs to be extracted from the response
+				any myresult := onnxResponse.payload.data.getEntry("output");
+				sequence<any> extract1 := <sequence<any>> myresult;
+				sequence<any> extract2 := <sequence<any>> extract1[0];
+				float extract3 := <float> extract2[0];
+				outputs["probability"] := extract3;
+				
+				//Perform a logic to differentiate Moving and Sitting labels
+				string label;
+				if(extract3>0.95){
+					label := "MOVING";
+				}
+				else{
+					label := "SITTING";
+				}
+
+				//Create an Event with the Probability value
+				//TODO More logics can be defined here: E.g. if Probability value is higher than 0.9, the activity is moving"
+				send Event("",
+						"c8y_ActivityRecognitionEvent",
+						deviceId,
+						currentTime,
+						"Activity Recognized as "+label,
+						outputs) to Event.SEND_CHANNEL;
+			} 
+			else
+			{
+				log "onnx response :" +
+					onnxResponse.payload.data.toString()
+					at INFO;
+			}
+		}
+	}
+}
