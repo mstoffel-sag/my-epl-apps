@@ -1,0 +1,65 @@
+/** Basic event definitions for working with Cumulocity IoT */
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+using com.apama.cumulocity.MeasurementFragment;
+
+/** Miscellaneous utilities */
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+
+monitor MySampleMonitor {
+	/** Initialize the application */
+	float lastState := 0.0;
+	action onload() {
+		monitor.subscribe(Measurement.SUBSCRIBE_CHANNEL);
+		on all Measurement(type="c8y_Acceleration") as me {
+			float val := me.measurements["c8y_Acceleration"]["accelerationZ"].value;
+			if val > 0.5 and lastState = 0.0{
+				lastState := 1.0;
+				sendMe(me,lastState);
+				
+			}else if val < -0.5 and lastState =1.0{
+				lastState := 0.0;
+				sendMe(me,lastState);
+			}
+		}
+
+
+		// Application starts here
+	}
+
+	action sendMe(Measurement origin,float val){
+		Measurement me := new Measurement;
+		me.source := origin.source;
+		me.time := origin.time;
+		me.type:= "c8y_DisplayState";
+		me.measurements.getOrAddDefault(me.type).getOrAddDefault(me.type).value := val;
+		send me to Measurement.SEND_CHANNEL;
+	}
+}
