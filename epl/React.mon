@@ -1,0 +1,80 @@
+/** Basic event definitions for working with Cumulocity IoT */
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+using com.apama.cumulocity.MeasurementFragment;
+
+/** Miscellaneous utilities */
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+using react_mqtt.ReactPrivate;
+using react_mqtt.ReactResult;
+using react_mqtt.ReactParams;
+using react_mqtt.ReactSend;
+
+
+
+
+/** This monitor is responsible for ...  */
+monitor AlarmSync {
+	string simpleResponseTopic:="alarm_sync";
+	action onload() {
+		log "Loaded monitor AlarmSync" at INFO;
+		monitor.subscribe("mqtt:" + simpleResponseTopic);
+		monitor.subscribe(Alarm.SUBSCRIBE_CHANNEL);
+		
+		
+		on all Alarm() as a{
+			log "New Alarm: " +a.toString();
+			if a.isCreate() {
+				ReactSend res := new ReactSend;
+				res.msg := "all";
+				res.params.sender:= a.source;
+				res.params.text:= "Alarm: " + a.type +" " + a.text+" "+a.severity;
+				res.private.requestId:= a.id;
+				res.private.simpleResponseTopic:= simpleResponseTopic;
+				log "Sending Alarm To React: " +res.toString();
+				send res to "mqtt:api";
+			}
+		
+		}
+		
+		on all ReactResult() as res{
+			log "Received Result from React: " +res.toString();
+			if res.result = "ack"{
+				Alarm a := new Alarm;
+				a.id := res.private.requestId;
+				a.status:= "CLEARED";
+				a.text := res.text;
+				send a to Alarm.SEND_CHANNEL;
+			}
+			
+		}
+		
+	}
+}
